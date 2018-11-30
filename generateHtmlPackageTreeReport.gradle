@@ -5,8 +5,9 @@
  */
 task renderHtmlTree() {
     doLast {
-        final String BASE_OUTPUT_DIR = "${rootProject.rootDir}/app/build/reports/jacoco/jacocoTestReport/htmlTree/"
-        final String xmlReportPath = "${rootProject.rootDir}/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml"
+        final String JACOCO_REPORT_DIR = "${rootProject.rootDir}/app/build/reports/jacoco/jacocoTestReport"
+        final String BASE_OUTPUT_DIR = "$JACOCO_REPORT_DIR/htmlTree/"
+        final String xmlReportPath = "$JACOCO_REPORT_DIR/jacocoTestReport.xml"
         final JacocoReportParser jacocoReportParser = new JacocoReportParser(xmlReportPath)
         final ReportTreeNode rootReportNode = jacocoReportParser.buildPackageTree()
 
