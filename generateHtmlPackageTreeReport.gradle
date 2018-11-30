@@ -1,0 +1,461 @@
+/**
+ * This script defines a task(renderHtmlTree) which is intended to create a coverage report that respects sub-packages.
+ * A report will be generated in app/build/reports/jacoco/jacocoTestReport/htmlTree/ (next to jacoco html and xml reports)
+ * IMPORTANT! This task MUST be executed only after jacoco html and xml report are generated!
+ */
+task renderHtmlTree() {
+    doLast {
+        final String BASE_OUTPUT_DIR = "${rootProject.rootDir}/app/build/reports/jacoco/jacocoTestReport/htmlTree/"
+        final String xmlReportPath = "${rootProject.rootDir}/app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml"
+        final JacocoReportParser jacocoReportParser = new JacocoReportParser(xmlReportPath)
+        final ReportTreeNode rootReportNode = jacocoReportParser.buildPackageTree()
+
+        HtmlTreeReportRenderer.renderHtmlTree(rootReportNode, BASE_OUTPUT_DIR)
+    }
+}
+
+/**
+ * Renders the business model of the parsed report tree in the html format
+ */
+class HtmlTreeReportRenderer {
+    static void renderHtmlTree(ReportTreeNode reportTreeNode, baseOutputDir) {
+        renderHtmlTreeRecursively(reportTreeNode, baseOutputDir)
+    }
+
+    private static void renderHtmlTreeRecursively(ReportTreeNode reportTreeNode, baseOutputDir) {
+        CoverageData coverageData = reportTreeNode.coverageData
+        HtmlReportTable htmlReportTable = new HtmlReportTable(baseOutputDir)
+        htmlReportTable.addRow(
+                HtmlReportTable.ElementType.TOTAL,
+                coverageData.elementName,
+                coverageData.missedInstructions,
+                coverageData.coveredInstructions,
+                "")
+        reportTreeNode.children.forEach {
+            CoverageData childCoverageData = it.coverageData
+            htmlReportTable.addRow(
+                    getHtmlElementType(childCoverageData.type),
+                    childCoverageData.elementName,
+                    childCoverageData.missedInstructions,
+                    childCoverageData.coveredInstructions,
+                    reportTreeNode.coverageData.elementName
+            )
+        }
+        String filePath = generateFilePathForNode(reportTreeNode, baseOutputDir)
+        File output = new File(filePath)
+        htmlReportTable.render(output, coverageData.elementName)
+        reportTreeNode.children.forEach {
+            renderHtmlTreeRecursively(it, baseOutputDir)
+        }
+    }
+
+    private static String generateFilePathForNode(ReportTreeNode reportTreeNode, baseOutputDir) {
+        if (reportTreeNode.isRootNode()) {
+            return "$baseOutputDir/index.html"
+        } else {
+            return "$baseOutputDir/package/${reportTreeNode.coverageData.elementName}.html"
+        }
+    }
+
+    private static HtmlReportTable.ElementType getHtmlElementType(CoverageData.Type coverageType) {
+        switch (coverageType) {
+            case CoverageData.Type.PACKAGE:
+                return HtmlReportTable.ElementType.PACKAGE
+            case CoverageData.Type.CLASS:
+                return HtmlReportTable.ElementType.CLASS
+            default: throw IllegalStateException("Cannot map $coverageType to HtmlReportTable.ElementType")
+        }
+    }
+}
+
+/**
+ * Represents a single html page with a jacoco coverage report table for a specific package
+ */
+class HtmlReportTable {
+    HtmlReportTable(String baseOutputDir) {
+        this.baseOutputDir = baseOutputDir
+    }
+
+    private final String baseOutputDir
+    private List<CoverageRow> coverageRows = new ArrayList()
+
+    /**
+     * Adds a single row to the output table
+     * @param elementType package, class or total
+     * @param elementName Package or Class name, it's empty for Total row
+     * @param missedInstructions
+     * @param coveredInstructions
+     */
+    void addRow(
+            ElementType elementType,
+            String elementName,
+            int missedInstructions,
+            int coveredInstructions,
+            String parentPackageName
+    ) {
+        coverageRows.add(
+                new CoverageRow(
+                        elementType,
+                        elementName,
+                        missedInstructions,
+                        coveredInstructions,
+                        parentPackageName
+                )
+        )
+    }
+
+    /**
+     * Generates html page
+     * @param output file to write into
+     * @param header header of the generated table
+     */
+    void render(File output, String header) {
+        output.getParentFile().mkdirs()
+        output.createNewFile()
+        output.write("")
+        output << '<html xmlns="http://www.w3.org/1999/xhtml" lang="en">'
+        output << '<body>'
+        output << "<h2>$header</h2>"
+        output << '<table class="coverage" cellspacing="0" id="coveragetable">'
+        renderTableHeader(output)
+        renderRows(output)
+        output << '</table>'
+        output << '</body>'
+        output << '</html>'
+    }
+
+    private static def renderTableHeader(File output) {
+        output << " <thead><tr>"
+        output << "<td>Element</td>"
+        output << "<td>Missed Instructions</td>"
+        output << "<td>Cov.</td>"
+        output << " </tr></thead>"
+    }
+
+    private def renderRows(File output) {
+        coverageRows.forEach {
+            if (it.elementType == ElementType.TOTAL) {
+                renderTotalRow(it, output)
+            } else {
+                renderOrdinalRow(it, output)
+            }
+        }
+    }
+
+    /**
+     * Appends the given file with the html representation of the given row. Row is ordinal(a package or a class, not total row)
+     */
+    private void renderOrdinalRow(CoverageRow row, File output) {
+        output << "<tr>"
+        output << "<td class='${row.elementType.TD_CLASS}'><a href='${generateRowLink(row)}'> ${row.elementName}</a></td>"
+        output << "<td>${row.missedInstructions}/${row.totalInstructions}</td>"
+        output << "<td>${row.calculatePercent()}%</td>"
+        output << "<td>"
+        output << "</tr>"
+    }
+
+    /**
+     * @return link href value to get details of the given row. For packages it leads to another table,
+     * for classes it leads to the class coverage details page. Total row is unacceptable
+     */
+    private String generateRowLink(CoverageRow row) {
+        switch (row.elementType) {
+            case ElementType.CLASS:
+                String classFileName = row.elementName + ".html"
+                return "$baseOutputDir../html/${row.parentPackageName}/${classFileName}"
+            case ElementType.PACKAGE:
+                return "$baseOutputDir/package/${row.elementName}.html"
+            default:
+                throw IllegalStateException("Unexpcted row type = ${row.elementType}")
+        }
+    }
+
+    /**
+     * Renders a total row in the very bottom of the table
+     */
+    private void renderTotalRow(CoverageRow totalRow, File output) {
+        output << "<tfoot><tr>"
+        output << "<td>Total</td>"
+        output << "<td>${totalRow.missedInstructions} of ${totalRow.totalInstructions}</td>"
+        output << "<td>${totalRow.calculatePercent()}%</td>"
+        output << "<td>"
+        output << "</tr></tfoot>"
+    }
+
+    enum ElementType {
+        PACKAGE("el_package"),
+        CLASS("el_class"),
+        TOTAL("")
+        final String TD_CLASS
+
+        ElementType(String TD_CLASS) {
+            this.TD_CLASS = TD_CLASS
+        }
+    }
+
+    /**
+     * UI model for a coverage item
+     */
+    private class CoverageRow {
+        final ElementType elementType
+        final int missedInstructions
+        final int coveredInstructions
+        final String elementName
+        final String parentPackageName
+
+        CoverageRow(
+                ElementType elementType,
+                String elementName,
+                int missedInstructions,
+                int coveredInstructions,
+                String parentPackageName
+        ) {
+            this.elementType = elementType
+            this.missedInstructions = missedInstructions
+            this.coveredInstructions = coveredInstructions
+            this.elementName = elementName
+            this.parentPackageName = parentPackageName
+        }
+
+        int getTotalInstructions() {
+            return missedInstructions + coveredInstructions
+        }
+
+        int calculatePercent() {
+            return (coveredInstructions.doubleValue() / totalInstructions * 100).intValue()
+        }
+    }
+}
+
+/**
+ * Business model of report tree
+ */
+class ReportTreeNode {
+    final CoverageData coverageData
+    final List<ReportTreeNode> children = new ArrayList()
+    final ReportTreeNode parent
+
+    ReportTreeNode(CoverageData coverageData, ReportTreeNode parent) {
+        this.coverageData = coverageData
+        this.parent = parent
+    }
+
+    private ReportTreeNode(CoverageData coverageData, List<ReportTreeNode> children, ReportTreeNode parent) {
+        this.coverageData = coverageData
+        this.parent = parent
+        this.children.addAll(children)
+    }
+
+    boolean isRootNode() {
+        return parent == null
+    }
+
+    ReportTreeNode withParent(ReportTreeNode parent) {
+        return new ReportTreeNode(coverageData, children, parent)
+    }
+
+    @Override
+    String toString() {
+        return "ReportTreeNode{" +
+                "\n coverageData=" + coverageData +
+                ", \nchildren=" + children +
+                '}\n'
+    }
+}
+
+/**
+ * Business model for Coverage
+ */
+class CoverageData {
+    final Type type
+    final String elementName
+    final int missedInstructions
+    final int coveredInstructions
+
+    static CoverageData fromCounterNode(NodeList counterNode, String elementName, Type type) {
+        Node instructionNode = counterNode.find { it.@type = 'INSTRUCTION' }
+        int missed = instructionNode.@missed.toInteger()
+        int covered = instructionNode.@covered.toInteger()
+        return new CoverageData(type, elementName, missed, covered)
+    }
+
+    CoverageData(Type type, String elementName, int missedInstructions, int coveredInstructions) {
+        this.elementName = elementName
+        this.missedInstructions = missedInstructions
+        this.coveredInstructions = coveredInstructions
+        this.type = type
+    }
+
+    @Override
+    String toString() {
+        return "CoverageData{" +
+                "\n type=" + type +
+                "\n elementName='" + elementName + '\'' +
+                "\n missedInstructions=" + missedInstructions +
+                "\n coveredInstructions=" + coveredInstructions +
+                '}'
+    }
+
+    enum Type {
+        PACKAGE,
+        CLASS
+    }
+}
+
+/**
+ * Parses xml jacoco report and generates a business model of a full jacoco report tree respecting subpackages
+ */
+class JacocoReportParser {
+    final Node rootNode
+
+    JacocoReportParser(String xmlReportPath) {
+        XmlParser xmlParser = new XmlParser()
+        xmlParser.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false)
+        xmlParser.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        rootNode = xmlParser.parse(new File(xmlReportPath))
+    }
+
+    /**
+     * @return generated business model of jacoco tree with respect of subpackages
+     */
+    ReportTreeNode buildPackageTree() {
+        Map<String, ReportTreeNode> flatReportTree = getFlatReportTree()
+
+        List<String> packageRoots = findPackageRoots(flatReportTree.keySet())
+        return buildPackageTreeInternally(packageRoots, flatReportTree)
+    }
+
+    private ReportTreeNode buildPackageTreeInternally(List<String> packageRoots, Map<String, ReportTreeNode> flatReportTree) {
+        List<ReportTreeNode> children = packageRoots.collect {
+            buildPackageTreeRecursively(it, flatReportTree, flatReportTree[it])
+        }
+        int missed = 0
+        int covered = 0
+        children.forEach {
+            missed += it.coverageData.missedInstructions
+            covered += it.coverageData.coveredInstructions
+        }
+        CoverageData rootCoverageData = new CoverageData(CoverageData.Type.PACKAGE, "application", missed, covered)
+        ReportTreeNode rootNode = new ReportTreeNode(rootCoverageData, null)
+        rootNode.children.addAll(children)
+        return rootNode
+    }
+
+    private ReportTreeNode buildPackageTreeRecursively(String packageName,
+                                                       Map<String, ReportTreeNode> flatReportTree,
+                                                       ReportTreeNode parent) {
+        Collection<ReportTreeNode> allChildren = flatReportTree.keySet()
+                .findAll { it.startsWith(packageName + ".") }
+                .collect { flatReportTree[it] }
+        if (allChildren.empty) {
+            return flatReportTree[packageName].withParent(parent)
+        }
+        int missed = 0
+        int covered = 0
+        allChildren.forEach {
+            covered += it.coverageData.coveredInstructions
+            missed += it.coverageData.missedInstructions
+        }
+
+        ReportTreeNode flatReportNode = flatReportTree[packageName]
+        if (flatReportNode != null) {
+            missed += flatReportNode.coverageData.missedInstructions
+            covered += flatReportNode.coverageData.coveredInstructions
+        }
+
+        CoverageData packageCoverageData = new CoverageData(CoverageData.Type.PACKAGE, packageName, missed, covered)
+        Collection<String> childPackages = getDirectChildPackages(allChildren, packageName)
+        ReportTreeNode resultNode = new ReportTreeNode(packageCoverageData, parent)
+
+        List<ReportTreeNode> treeDirectPackageChildren = childPackages.collect {
+            buildPackageTreeRecursively(it, flatReportTree, resultNode)
+        }
+        treeDirectPackageChildren.sort { it.coverageData.elementName }
+        resultNode.children.addAll(treeDirectPackageChildren)
+
+
+        List<ReportTreeNode> classChildNodes = getClassChildNodes(flatReportNode)
+        resultNode.children.addAll(classChildNodes)
+
+        return resultNode
+    }
+
+    private static List<ReportTreeNode> getClassChildNodes(ReportTreeNode reportNode) {
+        if (reportNode == null) {
+            return Collections.emptyList()
+        }
+        reportNode.children.findAll { it.coverageData.type == CoverageData.Type.CLASS }
+                .unique { it.coverageData.elementName }
+                .sort { it.coverageData.elementName } ?: Collections.emptyList()
+
+    }
+
+    /**
+     * @param allChildren all subpackages for parentPackageName, they can be direct or not
+     * @param parentPackageName parent package name
+     * @return only package names that are direct children for the given parentPackageName,
+     * e.g. <code>com.ooma.test</code> and <code>com.ooma.feature</code> are direct children for <code>com.ooma package</code>,
+     * while <code>com.ooma.test.subpackage</code> is not
+     */
+    private static Collection<String> getDirectChildPackages(
+            Collection<ReportTreeNode> allChildren,
+            String parentPackageName
+    ) {
+        return allChildren.collect {
+            it.coverageData.elementName
+        }.collect {
+            // select only direct subpackages
+            it.substring(parentPackageName.length() + 1).split('\\.', 2)[0]
+        }.collect {
+            // set full package name for direct subpackages
+            parentPackageName + "." + it
+        }.toSet()
+    }
+
+    /**
+     * @return a map (packageName) -> packageReportNode
+     */
+    private Map<String, ReportTreeNode> getFlatReportTree() {
+        Collection<Node> packageNode = rootNode.package
+        Map<String, ReportTreeNode> resultMap = new HashMap<>()
+        packageNode.forEach {
+            String packageName = it.@name.replace('/', '.')
+            resultMap[packageName] = getPackageTreeNode(it)
+        }
+        return resultMap
+    }
+
+    /**
+     * @param packages all packages in the project
+     * @return those packages that don't have any parent
+     */
+    private static List<String> findPackageRoots(Collection<String> packages) {
+        List<String> packagesCopy = new ArrayList<>(packages)
+        List rootPackages = new ArrayList()
+        packagesCopy.sort { it.length() }
+
+        while (!packagesCopy.isEmpty()) {
+            String newRootPackageName = packagesCopy[0]
+            rootPackages.add(newRootPackageName)
+            packagesCopy.removeAll { it.startsWith(newRootPackageName) }
+        }
+        return rootPackages
+    }
+
+    private static ReportTreeNode getPackageTreeNode(Node packageNode) {
+        String packageName = packageNode.@name.replace('/', '.')
+        CoverageData packageCoverageData = CoverageData.fromCounterNode(packageNode.counter, packageName, CoverageData.Type.PACKAGE)
+        ReportTreeNode reportTreeNode = new ReportTreeNode(packageCoverageData, null)
+
+        List<ReportTreeNode> children = packageNode.get('class').collect {
+            String className = it.@sourcefilename
+            CoverageData.Type type = CoverageData.Type.CLASS
+            CoverageData.fromCounterNode(it.counter, className, type)
+        }.toSet().collect {
+            new ReportTreeNode(it, reportTreeNode)
+        }
+
+        reportTreeNode.children.addAll(children)
+        return reportTreeNode
+    }
+}
