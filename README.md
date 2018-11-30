@@ -1,6 +1,6 @@
 # JacocoHtmlTree
 Generates jacoco reports with respect of subpackages.  
-Android app directory is hardcoded in the current version in the task definition, but you can change the path approprietaly for you project or write it in a more flexible way.
+Android app directory is hardcoded in the current version in the task definition, but you can change the path appropriately for you project or write it in a more flexible way.
 # Instruction
 1. Execute tests  
 2. Generate Jacoco reports in XML **and** HTML formats 
